@@ -1,0 +1,7 @@
+pytest>=8.0
+requests>=2.31
+selenium>=4.11
+allure-pytest>=2.13
+PyYAML>=6.0
+pytest-xdist>=3.5
+PyMySQL>=1.1

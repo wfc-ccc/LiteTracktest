@@ -1,0 +1,74 @@
+# 权限矩阵：4 角色 × 3 个敏感接口。
+#
+# 契约：全局异常处理器不改写 HTTP 状态码，权限不足时 HTTP 仍是 200，
+# 由 RoleAspect 抛出的业务异常最终落在 body.code = 403。
+# 所以矩阵单元格填的是「期望的 body.code」，不是 HTTP 状态码。
+#
+# 角色规则取自后端 /v3/api-docs 的接口描述：
+#   accept：任务负责人本人或 ADMIN/PM
+#   audit ：仅 ADMIN/PM
+#   assign：仅 ADMIN/PM
+# 造数任务的负责人固定是 dev01，因此 dev01 的 accept 属于「负责人本人」放行。
+# 权限规则一旦调整，只改这个文件即可，用例本身不用动。
+
+endpoints:
+  accept:
+    label: 接受任务
+    method: PATCH
+    path: "/api/tasks/{task_id}/accept"
+    pre_state: TODO
+    body: null
+
+  audit:
+    label: 审核任务
+    method: PATCH
+    path: "/api/tasks/{task_id}/audit"
+    pre_state: PENDING_REVIEW
+    body:
+      auditResult: PASS
+      auditReason: 权限矩阵用例自动审核
+
+  assign:
+    label: 重新指派任务
+    method: PATCH
+    path: "/api/tasks/{task_id}/assign"
+    pre_state: TODO
+    # 指派目标保持原负责人 dev01：本用例只验证权限边界，
+    # 不想把「指派对象是否为项目成员」这类无关校验变量引进来。
+    # 字符串值与 config/env.yaml 的账号键同名时，用例会替换成该账号的真实用户 ID。
+    body:
+      assigneeId: dev01
+
+# account 用于登录取真实用户 ID；client_fixture 是 conftest 里的角色会话夹具
+matrix:
+  - role: ADMIN
+    account: admin
+    client_fixture: admin_client
+    expected:
+      accept: 200
+      audit: 200
+      assign: 200
+
+  - role: PM
+    account: pm01
+    client_fixture: pm_client
+    expected:
+      accept: 200
+      audit: 200
+      assign: 200
+
+  - role: DEV
+    account: dev01
+    client_fixture: dev_client
+    expected:
+      accept: 200
+      audit: 403
+      assign: 403
+
+  - role: QA
+    account: qa01
+    client_fixture: qa_client
+    expected:
+      accept: 403
+      audit: 403
+      assign: 403

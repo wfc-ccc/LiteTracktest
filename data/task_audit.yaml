@@ -1,0 +1,9 @@
+# 审核权限用例的请求体，字段与 TaskAuditDTO / TaskSubmitDTO 一致
+submit:
+  submitHours: 1.5
+  submitDesc: 自动化提交：接口权限矩阵造数，可测版本 auto
+  submitAttachments: ""
+
+audit_pass:
+  auditResult: PASS
+  auditReason: 自动化审核通过
