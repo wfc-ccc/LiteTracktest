@@ -1,7 +1,7 @@
 """登录页 POM。
 
-源码是 src/views/Login.vue（不是 views/login/index.vue）。
-页面没有 data-test，定位器用登录卡片上稳定的 class 与 placeholder。
+源码是 src/views/Login.vue。
+页面没有 data-test，定位器用登录卡片上稳定的 class、placeholder 以及 Element Plus 的默认类名。
 """
 
 from __future__ import annotations
@@ -13,22 +13,41 @@ from utils.waits import wait_for_url_contains
 
 
 class LoginPage(BasePage):
+    # ================= 元素定位器 =================
     TITLE = (By.CSS_SELECTOR, ".login__title")
     USERNAME = (By.CSS_SELECTOR, ".login__card input[placeholder='请输入用户名']")
     PASSWORD = (By.CSS_SELECTOR, ".login__card input[placeholder='请输入密码']")
     SUBMIT = (By.CSS_SELECTOR, "button.login__submit")
+
+    # 表单校验错误提示 (Element Plus 默认类名)
+    FORM_ERROR = (By.CSS_SELECTOR, ".el-form-item__error")
+
+    # 全局轻提示 (挂在 body 上，不在表单内)
+    MESSAGE_TOAST = (By.CSS_SELECTOR, ".el-message__content")
+
     # 登录成功后布局顶栏，见 layout/Navbar.vue
     NAVBAR_TITLE = (By.CSS_SELECTOR, ".navbar__title")
     NAVBAR_NAME = (By.CSS_SELECTOR, ".navbar__name")
 
+    # ================= 页面动作 =================
+
     def open(self) -> None:
+        """打开登录页"""
         self.open_path("/login")
         self.visible(self.TITLE)
 
     def login(self, username: str, password: str) -> None:
+        """执行登录动作（点击按钮）"""
         self.type_text(self.USERNAME, username)
         self.type_text(self.PASSWORD, password)
         self.click(self.SUBMIT)
+
+    def login_by_enter(self, username: str, password: str) -> None:
+        """执行登录动作（使用密码框回车提交），对应源码的 @keyup.enter"""
+        self.type_text(self.USERNAME, username)
+        self.type_text(self.PASSWORD, password)
+        # 按回车键
+        self.visible(self.PASSWORD).send_keys("\n")
 
     def wait_until_logged_in(self) -> str:
         """等待进入工作台，返回顶栏显示的姓名。"""
@@ -43,3 +62,13 @@ class LoginPage(BasePage):
         """
         self.driver.execute_script("window.localStorage.clear()")
         self.open()
+
+    # ================= 断言辅助 =================
+
+    def get_form_error_text(self) -> str:
+        """获取表单的校验错误信息（用于测试必填、密码长度等前端校验）"""
+        return self.visible(self.FORM_ERROR).text.strip()
+
+    def get_message_text(self) -> str:
+        """获取全局提示信息（如 '欢迎回来' 或者 '用户名或密码错误'）"""
+        return self.visible(self.MESSAGE_TOAST).text.strip()

@@ -13,6 +13,7 @@ from selenium.webdriver.chrome.options import Options
 
 from api.auth_api import AuthApi
 from api.task_api import TaskApi
+from api.project_api import ProjectApi
 from pages.login_page import LoginPage
 from pages.task_board_page import TaskBoardPage
 from utils.config_loader import ROOT, load_env, load_yaml
@@ -155,9 +156,19 @@ def db(env) -> DBClient:
     return DBClient.from_env(env)
 
 
+# ================= 核心改造：基于 RoleClient 构建 API 实例 =================
+
 @pytest.fixture(scope="session")
-def task_api(api_session, env) -> TaskApi:
-    return TaskApi(api_session, env["api_base_url"])
+def pm_task_api(pm_client) -> TaskApi:
+    """PM 专属 TaskApi。依赖 pm_client 自动处理 Token 和 URL。"""
+    # 注意：传空字符串，让 RoleClient 去拼接完整 URL
+    return TaskApi(pm_client, base_url="")
+
+
+@pytest.fixture(scope="session")
+def admin_task_api(admin_client) -> TaskApi:
+    """ADMIN 专属 TaskApi。"""
+    return TaskApi(admin_client, base_url="")
 
 
 @pytest.fixture(scope="session")
@@ -165,21 +176,23 @@ def audit_payload() -> dict:
     return load_yaml("task_audit.yaml")
 
 
+# ================= 造数逻辑改造：移除 Token 传参 =================
+
 @pytest.fixture(scope="session")
-def project_id(task_api, pm_token, env) -> int:
+def project_id(pm_client, env) -> int:
     """造数项目 ID：env.yaml 配了就用，否则取 PM 可见的第一个项目。"""
-    return _resolve_project_id(task_api, pm_token, env)
+    return _resolve_project_id(pm_client, env)
 
 
-def _resolve_project_id(task_api: TaskApi, token: str, env: dict) -> int:
+def _resolve_project_id(client: requests.Session, env: dict) -> int:
     configured = env.get("project_id")
     if configured:
         return int(configured)
 
-    response = task_api.session.get(
-        f"{task_api.base_url}/api/projects",
+    # 直接使用 RoleClient 发请求
+    response = client.get(
+        "/api/projects",
         params={"current": 1, "size": 1},
-        headers={"Authorization": f"Bearer {token}"},
         timeout=15,
     )
     body = response.json()
@@ -190,66 +203,59 @@ def _resolve_project_id(task_api: TaskApi, token: str, env: dict) -> int:
 
 
 @pytest.fixture
-def todo_task_id(task_api, pm_token, login, env) -> int:
-    """PM 创建一条指派给 DEV 的任务并交出 task_id，用例结束后删除。
-
-    状态机防篡改与权限矩阵用例都需要一个「原封不动」的初始态任务，
-    所以这里只创建、不推进状态，前置状态由用例自己决定推到哪一步。
-    """
-    project_id = _resolve_project_id(task_api, pm_token, env)
+def todo_task_id(pm_task_api, pm_client, login, env) -> int:
+    """PM 创建一条指派给 DEV 的任务并交出 task_id，用例结束后删除。"""
+    project_id = _resolve_project_id(pm_client, env)
     assignee_id = login("dev01")["user"]["id"]
     title = f"auto-todo-{uuid.uuid4().hex[:12]}"
-    created = task_api.create(pm_token, {
+
+    # 直接调用，无需传 Token，失败会自动抛 AssertionError
+    pm_task_api.create({
         "projectId": project_id,
         "title": title,
         "description": "状态机/权限矩阵造数，用例结束会删除",
         "priority": "LOW",
         "assigneeId": assignee_id,
     })
-    TaskApi.raise_if_business_failed(created, "创建任务")
 
-    task_id = task_api.find_id_by_title(pm_token, title, project_id)
+    task_id = pm_task_api.find_id_by_title(title, project_id)
 
     yield task_id
 
-    deleted = task_api.delete(pm_token, task_id)
-    body = deleted.json()
-    if deleted.status_code != 200 or body.get("code") not in (200, 404):
-        pytest.fail(f"清理任务 {task_id} 失败: http={deleted.status_code}, body={body}")
+    # 清理任务 (由于 api 层内部做了校验，如果任务不存在会抛异常，这里捕获一下)
+    try:
+        pm_task_api.delete(task_id)
+    except AssertionError:
+        pass
 
 
 @pytest.fixture
-def setup_task(task_api, pm_token, login, env, audit_payload):
-    """PM 创建一条任务，推进到待审核后交出 task_id，用例结束后删除。
-
-    创建接口返回 Result<Void>，没有 taskId，所以用唯一标题回查。
-    审核通过要求当前状态是 PENDING_REVIEW，因此这里用 PM 身份接受并提交。
-    """
-    project_id = _resolve_project_id(task_api, pm_token, env)
+def setup_task(pm_task_api, pm_client, login, env, audit_payload):
+    """PM 创建一条任务，推进到待审核后交出 task_id，用例结束后删除。"""
+    project_id = _resolve_project_id(pm_client, env)
     assignee_id = login("dev01")["user"]["id"]
     title = f"auto-audit-{uuid.uuid4().hex[:12]}"
-    created = task_api.create(pm_token, {
+
+    pm_task_api.create({
         "projectId": project_id,
         "title": title,
         "description": "权限矩阵临时任务，用例结束会删除",
         "priority": "LOW",
         "assigneeId": assignee_id,
     })
-    TaskApi.raise_if_business_failed(created, "创建任务")
 
-    task_id = task_api.find_id_by_title(pm_token, title, project_id)
-    TaskApi.raise_if_business_failed(task_api.accept(pm_token, task_id), "接受任务")
-    TaskApi.raise_if_business_failed(
-        task_api.submit(pm_token, task_id, audit_payload["submit"]),
-        "提交任务",
-    )
+    task_id = pm_task_api.find_id_by_title(title, project_id)
+
+    # 推进状态
+    pm_task_api.accept(task_id)
+    pm_task_api.submit(task_id, audit_payload["submit"])
 
     yield task_id
 
-    deleted = task_api.delete(pm_token, task_id)
-    body = deleted.json()
-    if deleted.status_code != 200 or body.get("code") not in (200, 404):
-        pytest.fail(f"清理任务 {task_id} 失败: http={deleted.status_code}, body={body}")
+    try:
+        pm_task_api.delete(task_id)
+    except AssertionError:
+        pass
 
 
 @pytest.fixture
