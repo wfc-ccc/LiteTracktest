@@ -430,3 +430,17 @@ def pytest_runtest_makereport(item, call):
     file_path = SCREENSHOT_DIR / f"{item.name}.png"
     file_path.write_bytes(png)
     allure.attach(png, name=f"失败截图-{item.name}", attachment_type=allure.attachment_type.PNG)
+
+@pytest.fixture(scope="session")
+def no_auth_client(env) -> requests.Session:
+    """无token匿名会话，用于未登录鉴权测试"""
+    sess = requests.Session()
+    sess.base_url = env["api_base_url"].rstrip("/")
+    sess.headers.update({
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    })
+    yield sess
+    sess.close()
+
+

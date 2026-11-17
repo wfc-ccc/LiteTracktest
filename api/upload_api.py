@@ -1,91 +1,68 @@
-"""通用上传接口封装，对应 UploadController：/api/upload 下的相关接口。"""
-
-from __future__ import annotations
-
-import os
 import requests
-from typing import Optional, Any, Union
+import logging
 from pathlib import Path
+from typing import Optional
+
+from conftest import RoleClient
+
+logger = logging.getLogger(__name__)
 
 
 class UploadApi:
-    """通用上传接口封装类，复用传入的 Session。"""
+    def __init__(self, client: RoleClient, base_url: str, timeout: int = 10):
+        self.client = client
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
 
-    def __init__(self, session: requests.Session, base_url: str):
-        self.session = session
-        # 提取出该模块的基础路径
-        self.api_base = f"{base_url.rstrip('/')}/api/upload"
-
-    def _request(
-            self,
-            method: str,
-            path: str = "",
-            *,
-            files: Optional[dict] = None,
-            expect_data: bool = False
-    ) -> Any:
-        """内部统一请求方法，处理 URL 拼接、超时及业务校验。"""
-        url = f"{self.api_base}{path}"
-
-        response = self.session.request(
-            method=method,
-            url=url,
-            files=files,
-            timeout=15
-        )
-
-        response.raise_for_status()
-        body = response.json()
-
-        if body.get("code") != 200:
-            raise AssertionError(f"接口业务异常 [{method} {path}]: {body}")
-
-        data = body.get("data")
-        if expect_data and data is None:
-            raise AssertionError(f"接口返回数据为空 [{method} {path}]: {body}")
-
-        return data
-
-    # ================= 内部工具方法 =================
-
-    def _get_files_payload(self, file_path: Union[str, Path]) -> dict:
+    def _upload(self, api_path: str, file_path: str, content_type: Optional[str] = None) -> str:
         """
-        根据文件路径构造 requests 所需的 files 字典。
-        注意：调用此方法时，文件句柄不能立即关闭，需要由外层 request 发送完毕后自动回收。
+        通用上传方法
+        :param api_path: 上传接口路径，如 /api/upload/image
+        :param file_path: 本地文件路径
+        :param content_type: 可覆盖的mime类型，不传默认 image/jpeg
+        :return: 文件url字符串
         """
-        path = Path(file_path)
-        if not path.exists() or not path.is_file():
-            raise FileNotFoundError(f"待上传的文件不存在: {file_path}")
+        url = f"{self.base_url}{api_path}"
+        fp = Path(file_path)
+        if content_type is None:
+            content_type = "image/jpeg"
 
-        # 以二进制模式打开文件
-        file_obj = open(path, "rb")
-        # requests 格式: {'file': (filename, file_obj)}
-        return {"file": (path.name, file_obj)}
-
-    # ================= 具体接口定义 =================
-
-    def upload_image(self, file_path: Union[str, Path]) -> str:
-        """
-        上传图片/附件：POST /api/upload/image
-        允许后缀：jpg / jpeg / png / gif / txt / log / pdf / doc / docx，单文件不超过 10MB。
-        返回可直接访问的完整 URL。
-        """
-        files = self._get_files_payload(file_path)
+        old_content_type = self.client.headers.pop("Content-Type", None)
         try:
-            return self._request("POST", "/image", files=files, expect_data=True)
-        finally:
-            # 确保请求发送完毕后关闭文件句柄，释放系统资源
-            files["file"][1].close()
+            with fp.open("rb") as f:
+                files = {"file": (fp.name, f, content_type)}
+                resp = self.client.post(url, files=files, timeout=self.timeout)
 
-    def upload_file(self, file_path: Union[str, Path]) -> str:
-        """
-        上传通用附件：POST /api/upload/file
-        不限后缀（支持 .log / .txt 等测试日志），单文件不超过 10MB。
-        返回可直接访问的完整 URL。
-        """
-        files = self._get_files_payload(file_path)
-        try:
-            return self._request("POST", "/file", files=files, expect_data=True)
+            resp_json = resp.json()
+            logger.info(f"[上传返回] {resp_json}")
+            if resp_json.get("code") != 200:
+                raise AssertionError(f"上传失败：{resp_json}")
+            # 重点修复：data直接是url字符串，不是dict
+            return resp_json.get("data")
+
         finally:
-            # 确保请求发送完毕后关闭文件句柄，释放系统资源
-            files["file"][1].close()
+            if old_content_type is not None:
+                self.client.headers["Content-Type"] = old_content_type
+
+    def upload_file(self, file_path: str, content_type: Optional[str] = None) -> str:
+        return self._upload("/api/upload/file", file_path, content_type=content_type)
+
+    def upload_image(self, file_path: str, content_type: Optional[str] = None) -> str:
+        return self._upload("/api/upload/image", file_path, content_type=content_type)
+
+    def delete_by_url(self, file_url: str, skip_check: bool = False):
+        url = f"{self.base_url}/api/upload/delete"
+        payload = {"url": file_url}
+
+        logger.info(f"[删除请求] url={url}, body={payload}")
+        resp = self.client.delete(url, json=payload, timeout=self.timeout)
+
+        if skip_check:
+            return resp.json()
+        resp.raise_for_status()
+        res_json = resp.json()
+        logger.info(f"[删除返回] {res_json}")
+
+        if res_json.get("code") != 200:
+            raise AssertionError(f"删除失败：{res_json}")
+        return res_json

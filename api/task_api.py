@@ -15,20 +15,18 @@ class TaskApi:
         self.api_base = f"{base_url.rstrip('/')}/api/tasks"
 
     def _request(
-        self,
-        method: str,
-        path: str = "",
-        *,
-        params: Optional[dict] = None,
-        json: Optional[dict] = None,
-        expect_data: bool = False
+            self,
+            method: str,
+            path: str = "",
+            *,
+            params: Optional[dict] = None,
+            json: Optional[dict] = None,
+            expect_data: bool = False,
+            skip_code_check: bool = False
     ) -> Any:
-        """内部统一请求方法，处理 URL 拼接、参数过滤、超时及业务校验。"""
         url = f"{self.api_base}{path}"
-
         if params:
             params = {k: v for k, v in params.items() if v is not None}
-
         response = self.session.request(
             method=method,
             url=url,
@@ -36,18 +34,14 @@ class TaskApi:
             json=json,
             timeout=15
         )
-
         response.raise_for_status()
         body = response.json()
-
-        if body.get("code") != 200:
+        if not skip_code_check and body.get("code") != 200:
             raise AssertionError(f"接口业务异常 [{method} {path}]: {body}")
-
         data = body.get("data")
         if expect_data and data is None:
             raise AssertionError(f"接口返回数据为空 [{method} {path}]: {body}")
-
-        return data
+        return body if skip_code_check else data
 
     # ================= 1. 查询类接口 =================
 
@@ -141,3 +135,11 @@ class TaskApi:
         :param data: 包含 auditResult 和 auditReason 的字典
         """
         self._request("PATCH", f"/{task_id}/audit", json=data)
+
+    def find_id_by_title(self, title: str, project_id: int) -> int:
+        page_data = self.page(project_id=project_id, keyword=title, size=10)
+        records = page_data.get("records", [])
+        for item in records:
+            if item.get("title") == title:
+                return int(item["id"])
+        raise AssertionError(f"未找到标题为【{title}】的任务，project_id={project_id}")
