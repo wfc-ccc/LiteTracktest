@@ -17,9 +17,9 @@ class UploadApi:
     def _upload(self, api_path: str, file_path: str, content_type: Optional[str] = None) -> str:
         """
         通用上传方法
-        :param api_path: 上传接口路径，如 /api/upload/image
+        :param api_path: 上传接口路径
         :param file_path: 本地文件路径
-        :param content_type: 可覆盖的mime类型，不传默认 image/jpeg
+        :param content_type: mime类型，不传默认 image/jpeg
         :return: 文件url字符串
         """
         url = f"{self.base_url}{api_path}"
@@ -27,6 +27,7 @@ class UploadApi:
         if content_type is None:
             content_type = "image/jpeg"
 
+        # 核心：删掉header里的Content-Type，交给requests自动生成multipart/form-data
         old_content_type = self.client.headers.pop("Content-Type", None)
         try:
             with fp.open("rb") as f:
@@ -37,18 +38,18 @@ class UploadApi:
             logger.info(f"[上传返回] {resp_json}")
             if resp_json.get("code") != 200:
                 raise AssertionError(f"上传失败：{resp_json}")
-            # 重点修复：data直接是url字符串，不是dict
+            # data直接是url字符串
             return resp_json.get("data")
 
         finally:
+            # 恢复原来的header，不影响其他接口
             if old_content_type is not None:
                 self.client.headers["Content-Type"] = old_content_type
 
+    # 唯一上传入口，对接 /api/upload/file
     def upload_file(self, file_path: str, content_type: Optional[str] = None) -> str:
         return self._upload("/api/upload/file", file_path, content_type=content_type)
 
-    def upload_image(self, file_path: str, content_type: Optional[str] = None) -> str:
-        return self._upload("/api/upload/image", file_path, content_type=content_type)
 
     def delete_by_url(self, file_url: str, skip_check: bool = False):
         url = f"{self.base_url}/api/upload/delete"
