@@ -1,6 +1,7 @@
 """页面对象基类：只通过显式等待操作元素。"""
-
 from __future__ import annotations
+
+import time
 
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
@@ -29,3 +30,10 @@ class BasePage:
 
     def click(self, locator: tuple, timeout: float = 10) -> None:
         self.clickable(locator, timeout).click()
+
+    def safe_set_input(self, locator, value):
+        el = self.visible(locator)
+        self.driver.execute_script("arguments[0].value=arguments[1];", el, value)
+
+
+

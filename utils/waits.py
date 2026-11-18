@@ -1,5 +1,4 @@
 """Selenium 4 显式等待。用例与页面对象禁止使用 time.sleep。"""
-
 from __future__ import annotations
 
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -27,10 +26,9 @@ def wait_for_url_contains(driver: WebDriver, fragment: str, timeout: float = DEF
 
 def wait_for_first_displayed(driver: WebDriver, locator: tuple, timeout: float = DEFAULT_TIMEOUT) -> WebElement:
     """等待匹配 locator 的元素中第一个「可见」的那个。
-
-    Element Plus 的下拉面板常驻 DOM，关闭时只是 ``display: none``，
-    EC.visibility_of_element_located 只认第一个匹配项，会一直等隐藏的那个而超时。
-    """
+     Element Plus 的下拉面板常驻 DOM，关闭时只是 ``display: none``，
+     EC.visibility_of_element_located 只认第一个匹配项，会一直等隐藏的那个而超时。
+     """
     def _first_displayed(driver: WebDriver) -> WebElement | bool:
         for element in driver.find_elements(*locator):
             if element.is_displayed():
@@ -38,3 +36,8 @@ def wait_for_first_displayed(driver: WebDriver, locator: tuple, timeout: float =
         return False
 
     return WebDriverWait(driver, timeout).until(_first_displayed)
+
+
+def wait_for_element_invisible(driver: WebDriver, locator: tuple, timeout: float = DEFAULT_TIMEOUT) -> bool:
+    """等待元素不可见（display:none / 不在DOM）"""
+    return WebDriverWait(driver, timeout).until(EC.invisibility_of_element_located(locator))

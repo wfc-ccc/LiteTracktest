@@ -1,15 +1,17 @@
 """任务看板 POM。
-
 源码是 src/views/task/TaskBoard.vue。
 包含了极高的状态流转、复杂的筛选、抽屉面板及多个操作弹窗。
 """
-
 from __future__ import annotations
-
 from selenium.webdriver.common.by import By
 
 from pages.base_page import BasePage
-from utils.waits import wait_for_first_displayed, wait_for_element_visible
+from utils.waits import (
+    wait_for_element_visible,
+    wait_for_element_clickable,
+    wait_for_element_invisible,
+    wait_for_first_displayed
+)
 
 
 class TaskBoardPage(BasePage):
@@ -31,7 +33,7 @@ class TaskBoardPage(BasePage):
     TASK_ROW_TITLE = (By.XPATH, "//span[contains(@class,'task-title-link') and normalize-space(.)='{title}']")
     TASK_ROW_ACTION = (By.XPATH, "//tr[.//span[contains(@class,'task-title-link') and normalize-space(.)='{title}']]//button[contains(., '{btn_text}')]")
     # 状态位于该行第 2 列
-    TASK_ROW_STATUS = (By.XPATH, "//tr[.//span[contains(@class,'task-title-link') and normalize-space(.)='{title}']]/td[2]//span[contains(@class,'el-tag')]")
+    TASK_ROW_STATUS = (By.XPATH, "//tr[.//span[contains(@class,'task-title-link')] and normalize-space(.)='{title}']/td[2]//span[contains(@class,'el-tag')]")
 
     # ================= 3. 新建任务弹窗 =================
     CREATE_DIALOG_TITLE = (By.XPATH, "//div[contains(@class,'el-dialog')]//span[contains(@class,'el-dialog__title') and contains(., '新建任务')]")
@@ -42,6 +44,9 @@ class TaskBoardPage(BasePage):
     DIALOG_FILE_UPLOAD = (By.CSS_SELECTOR, ".el-dialog input[type='file']")
     DIALOG_BTN_SUBMIT = (By.XPATH, "//div[contains(@class,'el-dialog__footer')]//button[contains(., '确定')]")
     DIALOG_BTN_CANCEL = (By.XPATH, "//div[contains(@class,'el-dialog__footer')]//button[contains(., '取消')]")
+
+    # 日期选择弹窗popper
+    DATETIME_POPPER = (By.CSS_SELECTOR, ".el-date-picker__popper")
 
     # ================= 4. 任务详情抽屉 (Drawer) =================
     DRAWER_TITLE = (By.CSS_SELECTOR, ".task-detail__title")
@@ -54,7 +59,11 @@ class TaskBoardPage(BasePage):
     MSG_BOX = (By.CSS_SELECTOR, ".el-message-box")
     MSG_BOX_CONFIRM = (By.CSS_SELECTOR, ".el-message-box__btns .el-button--primary")
 
-    # ================= 6. 各种操作弹窗 =================
+    # ================= 6. 全局 el-message 提示 =================
+    EL_MESSAGE = (By.CSS_SELECTOR, ".el-message")
+    EL_MESSAGE_TEXT = (By.XPATH, "//div[contains(@class,'el-message')]//p[normalize-space()='{msg}']")
+
+    # ================= 7. 各种操作弹窗 =================
     # 弹窗内通用 textarea
     ACTION_DIALOG_TEXTAREA = (By.XPATH, "//div[contains(@class,'el-dialog')]//label[contains(., '{label}')]/following-sibling::div//textarea")
     # 弹窗内通用提交按钮（按文字匹配，如“确认拒绝”、“提交”、“确认阻塞”等）
@@ -112,21 +121,65 @@ class TaskBoardPage(BasePage):
         self.click(self.BTN_CREATE)
         self.visible(self.CREATE_DIALOG_TITLE)
 
-    def fill_create_form(self, title: str, desc: str = "", priority: str = "中", assignee: str = ""):
-        self.type_text((self.DIALOG_INPUT[0], self.DIALOG_INPUT[1].replace("{label}", "标题")), title)
+    def fill_create_form(self, title: str, assignee_name: str, deadline: str = "", desc: str = "",
+                         priority: str = "中"):
+        """
+        填写新建任务表单
+        :param title: 任务标题
+        :param assignee_name: 下拉展示文本，例如 "张开发 (开发)"
+        :param deadline: 截止日期 YYYY-MM-DD
+        :param desc: 任务描述
+        :param priority: 优先级：高 / 中 / 低
+        """
+        # 标题输入：JS赋值 + 抛input事件，同步v-model
+        title_loc = (self.DIALOG_INPUT[0], self.DIALOG_INPUT[1].replace("{label}", "标题"))
+        title_input = wait_for_element_clickable(self.driver, title_loc, 8)
+        self.driver.execute_script("""
+            const el = arguments[0];
+            el.value = arguments[1];
+            el.dispatchEvent(new Event('input'));
+        """, title_input, title)
+
         if desc:
-            self.type_text((self.DIALOG_TEXTAREA[0], self.DIALOG_TEXTAREA[1].replace("{label}", "描述")), desc)
+            desc_loc = (self.DIALOG_TEXTAREA[0], self.DIALOG_TEXTAREA[1].replace("{label}", "描述"))
+            desc_input = wait_for_element_clickable(self.driver, desc_loc, 8)
+            self.driver.execute_script("""
+                const el = arguments[0];
+                el.value = arguments[1];
+                el.dispatchEvent(new Event('input'));
+            """, desc_input, desc)
+
+        # 优先级下拉
         if priority:
-            self.click((self.DIALOG_SELECT[0], self.DIALOG_SELECT[1].replace("{label}", "优先级")))
+            pri_loc = (self.DIALOG_SELECT[0], self.DIALOG_SELECT[1].replace("{label}", "优先级"))
+            self.click(pri_loc)
             opt = (self.OPTION_DROPDOWN[0], self.OPTION_DROPDOWN[1].replace("{text}", priority))
             wait_for_first_displayed(self.driver, opt).click()
-        if assignee:
-            self.click((self.DIALOG_SELECT[0], self.DIALOG_SELECT[1].replace("{label}", "指派给")))
-            opt = (self.OPTION_DROPDOWN[0], self.OPTION_DROPDOWN[1].replace("{text}", assignee))
-            wait_for_first_displayed(self.driver, opt).click()
+            wait_for_element_invisible(self.driver, (By.CSS_SELECTOR, ".el-select-dropdown"))
+
+        # 指派给下拉
+        assign_loc = (self.DIALOG_SELECT[0], self.DIALOG_SELECT[1].replace("{label}", "指派给"))
+        self.click(assign_loc)
+        opt = (self.OPTION_DROPDOWN[0], self.OPTION_DROPDOWN[1].replace("{text}", assignee_name))
+        wait_for_first_displayed(self.driver, opt).click()
+        wait_for_element_invisible(self.driver, (By.CSS_SELECTOR, ".el-select-dropdown"))
+
+        # 截止日期
+        if deadline:
+            dl_loc = (self.DIALOG_INPUT[0], self.DIALOG_INPUT[1].replace("{label}", "截止日期"))
+            dl_input = wait_for_element_clickable(self.driver, dl_loc, 8)
+            self.driver.execute_script("""
+                const el = arguments[0];
+                el.value = arguments[1];
+                el.dispatchEvent(new Event('input'));
+            """, dl_input, deadline)
+            wait_for_element_invisible(self.driver, self.DATETIME_POPPER)
 
     def submit_create(self):
-        self.click(self.DIALOG_BTN_SUBMIT)
+        """提交新建任务弹窗"""
+        submit_loc = (By.XPATH, "//div[@role='dialog']//span[normalize-space()='确定']/parent::button")
+        btn = self.visible(submit_loc, timeout=10)
+        self.driver.execute_script("arguments[0].click();", btn)
 
     # ================= 抽屉交互 =================
     def get_drawer_hint(self) -> str:
@@ -151,3 +204,34 @@ class TaskBoardPage(BasePage):
         """处理全局的确认框（如审核通过确认、恢复任务确认）"""
         self.visible(self.MSG_BOX)
         self.click(self.MSG_BOX_CONFIRM)
+
+    # ========== 【新增补充方法，方便后续用例全覆盖】 ==========
+    def cancel_create_dialog(self):
+        """取消新建任务弹窗"""
+        self.click(self.DIALOG_BTN_CANCEL)
+        wait_for_element_invisible(self.driver, self.CREATE_DIALOG_TITLE)
+
+    def task_exists_on_board(self, title: str, timeout: float = 10) -> bool:
+        """判断看板上是否存在指定标题任务，断言用"""
+        loc = (self.TASK_ROW_TITLE[0], self.TASK_ROW_TITLE[1].replace("{title}", title))
+        try:
+            wait_for_element_visible(self.driver, loc, timeout)
+            return True
+        except Exception:
+            return False
+
+    def wait_message(self, msg: str, timeout: float = 10):
+        """等待 ElementPlus 全局 el-message 提示出现（精确文本匹配）"""
+        loc = (self.EL_MESSAGE_TEXT[0], self.EL_MESSAGE_TEXT[1].replace("{msg}", msg))
+        return wait_for_element_visible(self.driver, loc, timeout)
+
+    def wait_message_disappear(self, msg: str, timeout: float = 10):
+        """等待全局提示消失"""
+        loc = (self.EL_MESSAGE_TEXT[0], self.EL_MESSAGE_TEXT[1].replace("{msg}", msg))
+        wait_for_element_invisible(self.driver, loc, timeout)
+
+    def wait_row(self, title: str, timeout: float = 10):
+        """等待任务行标题元素可见，返回元素"""
+        loc = (self.TASK_ROW_TITLE[0], self.TASK_ROW_TITLE[1].replace("{title}", title))
+        return wait_for_element_visible(self.driver, loc, timeout)
+

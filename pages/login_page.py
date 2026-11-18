@@ -1,12 +1,12 @@
 """登录页 POM。
-
 源码是 src/views/Login.vue。
 页面没有 data-test，定位器用登录卡片上稳定的 class、placeholder 以及 Element Plus 的默认类名。
 """
-
 from __future__ import annotations
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
 from pages.base_page import BasePage
 from utils.waits import wait_for_url_contains
@@ -30,10 +30,20 @@ class LoginPage(BasePage):
     NAVBAR_NAME = (By.CSS_SELECTOR, ".navbar__name")
 
     # ================= 页面动作 =================
-
     def open(self) -> None:
-        """打开登录页"""
+        """打开登录页：先清空本地token，避免路由守卫自动跳转dashboard"""
+        # 清除存储，路由守卫依赖 localStorage['litetrack_token']
+        self.driver.execute_script("window.localStorage.clear();")
+        self.driver.execute_script("window.sessionStorage.clear();")
+        # 清除cookie兜底
+        self.driver.delete_all_cookies()
+
         self.open_path("/login")
+        # 等待路由稳定，确认没有被重定向到dashboard
+        WebDriverWait(self.driver, 10).until(
+            lambda d: "/dashboard" not in d.current_url
+        )
+        # 等待登录标题元素
         self.visible(self.TITLE)
 
     def login(self, username: str, password: str) -> None:
@@ -57,14 +67,12 @@ class LoginPage(BasePage):
 
     def logout(self) -> None:
         """清掉本地令牌后回到登录页，用于用例中途切换身份。
-
         路由守卫只认 localStorage['litetrack_token']，不清掉时访问 /login 会被弹回工作台。
         """
         self.driver.execute_script("window.localStorage.clear()")
         self.open()
 
     # ================= 断言辅助 =================
-
     def get_form_error_text(self) -> str:
         """获取表单的校验错误信息（用于测试必填、密码长度等前端校验）"""
         return self.visible(self.FORM_ERROR).text.strip()

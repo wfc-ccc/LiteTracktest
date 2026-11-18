@@ -358,7 +358,10 @@ def setup_task(pm_task_api, pm_client, login, env, audit_payload) -> int:
 
 @pytest.fixture
 def driver(request):
-    """每个 UI 用例一个 Chrome。--headless 时使用无头模式，结束时 quit。"""
+    """每个 UI 用例一个 Edge。--headless 时使用无头模式，结束时 quit。"""
+    from selenium.webdriver.edge.options import Options
+    from selenium.webdriver import Edge
+
     options = Options()
     if request.config.getoption("--headless"):
         options.add_argument("--headless=new")
@@ -366,10 +369,12 @@ def driver(request):
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    browser = webdriver.Chrome(options=options)
+
+    browser = Edge(options=options)
     browser.set_page_load_timeout(30)
     yield browser
     browser.quit()
+
 
 
 @pytest.fixture
@@ -378,14 +383,19 @@ def logged_in_driver(driver, env, login, pm_token):
     利用 API 拿到 Token 后，直接通过 JS 注入浏览器的 localStorage，跳过 UI 登录步骤。
     默认使用 PM 角色，如果想用其他角色，在用例中重新注入即可。
     """
+    # 先打开前端首页
     driver.get(env["web_base_url"])
+    # 执行JS脚本：把token写入浏览器本地存储，模拟登录成功
     driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{pm_token}')")
+    # 跳转到仪表盘页面
     driver.get(f"{env['web_base_url']}/dashboard")
 
+    # 导入等待工具，等待页面顶部导航栏标题元素出现，代表登录后页面加载完成
     from utils.waits import wait_for_element_visible
     from selenium.webdriver.common.by import By
     wait_for_element_visible(driver, (By.CSS_SELECTOR, ".navbar__title"))
     return driver
+
 
 
 @pytest.fixture
