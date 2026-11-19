@@ -1,7 +1,4 @@
-"""登录页 POM。
-源码是 src/views/Login.vue。
-页面没有 data-test，定位器用登录卡片上稳定的 class、placeholder 以及 Element Plus 的默认类名。
-"""
+"""登录页 POM。 源码是 src/views/Login.vue。 页面没有 data-test，定位器用登录卡片上稳定的 class、placeholder 以及 Element Plus 的默认类名。 """
 from __future__ import annotations
 
 from selenium.webdriver.common.by import By
@@ -32,10 +29,13 @@ class LoginPage(BasePage):
     # ================= 页面动作 =================
     def open(self) -> None:
         """打开登录页：先清空本地token，避免路由守卫自动跳转dashboard"""
-        # 清除存储，路由守卫依赖 localStorage['litetrack_token']
+        # 🌟 核心修复：如果当前还是 data:, 空白页，必须先访问一次真实域名建立 origin
+        if not self.driver.current_url.startswith(self.base_url):
+            self.driver.get(self.base_url)
+
+        # 此时可以安全地清除存储和 Cookie 了
         self.driver.execute_script("window.localStorage.clear();")
         self.driver.execute_script("window.sessionStorage.clear();")
-        # 清除cookie兜底
         self.driver.delete_all_cookies()
 
         self.open_path("/login")
@@ -45,6 +45,10 @@ class LoginPage(BasePage):
         )
         # 等待登录标题元素
         self.visible(self.TITLE)
+
+    def wait_login_page_display(self, timeout=10):
+        """等待登录页面卡片加载完成，登出切换身份时使用"""
+        self.visible(self.USERNAME, timeout=timeout)
 
     def login(self, username: str, password: str) -> None:
         """执行登录动作（点击按钮）"""
@@ -69,6 +73,10 @@ class LoginPage(BasePage):
         """清掉本地令牌后回到登录页，用于用例中途切换身份。
         路由守卫只认 localStorage['litetrack_token']，不清掉时访问 /login 会被弹回工作台。
         """
+        # 🌟 核心修复：确保在真实页面上清空 Token
+        if not self.driver.current_url.startswith(self.base_url):
+            self.driver.get(self.base_url)
+
         self.driver.execute_script("window.localStorage.clear()")
         self.open()
 

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import time
-
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 
@@ -35,5 +36,6 @@ class BasePage:
         el = self.visible(locator)
         self.driver.execute_script("arguments[0].value=arguments[1];", el, value)
 
-
-
+    def wait_url(self, path: str, timeout: float = 10):
+        """等待 URL 包含指定路径"""
+        WebDriverWait(self.driver, timeout).until(EC.url_contains(path))

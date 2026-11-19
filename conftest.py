@@ -1,11 +1,10 @@
-"""全局夹具：HTTP 会话、多角色 Token、项目自动创建&清理、任务造数、Chrome 驱动、失败截图。"""
+"""全局夹具：HTTP 会话、多角色 Token、项目自动创建&清理、任务造数、Chrome/Edge 驱动、失败截图。"""
 from __future__ import annotations
 
 import uuid
 import allure
 import pytest
 import requests
-from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
 from api.auth_api import AuthApi
@@ -24,6 +23,7 @@ from pages.components.notice_center import NoticeCenterComponent
 
 from utils.config_loader import ROOT, load_env, load_yaml
 from utils.db import DBClient
+from utils.waits import wait_for_element_visible
 
 SCREENSHOT_DIR = ROOT / "screenshots"
 
@@ -59,7 +59,7 @@ def pytest_addoption(parser):
         "--headless",
         action="store_true",
         default=False,
-        help="以 Chrome Headless 运行 UI 用例（Jenkins 必须打开）",
+        help="以无头模式运行 UI 用例（Jenkins 必须打开）",
     )
 
 
@@ -160,7 +160,6 @@ def db(env) -> DBClient:
 
 
 # ================= 核心改造：基于 RoleClient 构建全量 API 实例 =================
-# 这里遵循：哪个角色能调哪个接口，就给它配对应的 API 实例。
 
 # --- 任务 API ---
 @pytest.fixture(scope="session")
@@ -221,17 +220,41 @@ def dev_task_block_api(dev_client) -> TaskBlockApi:
     return TaskBlockApi(dev_client, base_url="")
 
 
-# ====================== 改造点：创建项目时直接传入 memberIds ======================
+@pytest.fixture(scope="session")
+def no_auth_client(env) -> requests.Session:
+    """无token匿名会话，用于未登录鉴权测试"""
+    sess = requests.Session()
+    sess.base_url = env["api_base_url"].rstrip("/")
+    sess.headers.update({
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    })
+    yield sess
+    sess.close()
+
+
+# ====================== 完美版：项目自动创建、配置与清理 ======================
 @pytest.fixture(scope="session", autouse=True)
 def auto_create_project(pm_client, env, login):
-    """env 未配置 project_id 时，由 pm01 自动创建测试项目，并在创建时把 dev01、qa01 加入成员。"""
+    """
+    Session 级别的全局前置操作：
+    1. 如果 env.yaml 中配置了 project_id，则直接使用，并查出项目名存入 env["project_name"]
+    2. 如果未配置，则自动由 PM 创建一个带 DEV/QA 成员的项目，结束后自动删除
+    """
+    base_url = env["api_base_url"]
+
+    # 情况 1：已配置 project_id
     if env.get("project_id"):
-        yield None
+        proj_id = int(env["project_id"])
+        resp = pm_client.get(f"{base_url}/api/projects/{proj_id}", timeout=10)
+        body = resp.json()
+        if body.get("code") == 200 and body.get("data"):
+            env["project_name"] = body["data"]["name"]
+            print(f"\n[init project] 使用已有项目配置: id={proj_id}, name={env['project_name']}")
+        yield proj_id
         return
 
-    base_url = env["api_base_url"]
-    proj_create_url = f"{base_url}/api/projects"
-    proj_list_url = f"{base_url}/api/projects"
+    # 情况 2：未配置，自动创建
     proj_id = None
     proj_name = f"pytest-auto-proj-{uuid.uuid4().hex[:12]}"
 
@@ -239,41 +262,39 @@ def auto_create_project(pm_client, env, login):
         dev_uid = login("dev01")["user"]["id"]
         qa_uid = login("qa01")["user"]["id"]
         member_ids = [dev_uid, qa_uid]
-        print(f"[debug] memberIds={member_ids}")
 
-        # 1. PM 创建项目，并通过 ProjectSaveDTO.memberIds 直接加入成员
-        resp = pm_client.post(proj_create_url, json={
+        # 1. 创建项目
+        resp = pm_client.post(f"{base_url}/api/projects", json={
             "name": proj_name,
             "description": "自动创建，会话结束自动清理",
             "memberIds": member_ids
         }, timeout=10)
-        body = resp.json()
-        assert body.get("code") == 200, f"创建项目失败：{body}"
+        assert resp.json().get("code") == 200, f"创建项目失败：{resp.text}"
 
-        # 2. 创建接口返回 Void，按名称回查列表获取项目 id
-        resp_list = pm_client.get(proj_list_url, params={
-            "name": proj_name,
-            "current": 1,
-            "size": 10
+        # 2. 查询项目 ID
+        resp_list = pm_client.get(f"{base_url}/api/projects", params={
+            "name": proj_name, "current": 1, "size": 10
         }, timeout=10)
-        list_body = resp_list.json()
-        records = (list_body.get("data") or {}).get("records") or []
+        records = (resp_list.json().get("data") or {}).get("records") or []
         assert records, f"未查询到刚创建的项目：{proj_name}"
 
         proj_id = int(records[0]["id"])
+
+        # 🌟 核心：把 ID 和 名字 都存入 env，供后续用例直接调用
         env["project_id"] = proj_id
-        print(f"[init project] 创建项目成功，name={proj_name}, id={proj_id}, memberIds={member_ids}")
+        env["project_name"] = proj_name
+        print(f"\n[init project] 自动创建项目成功: id={proj_id}, name={proj_name}")
 
         yield proj_id
 
     finally:
-        # 3. 会话结束自动删除项目
+        # 3. 清理刚创建的项目
         if proj_id:
             try:
                 pm_client.delete(f"{base_url}/api/projects/{proj_id}", timeout=10)
-                print(f"[clean project] 删除项目成功，id={proj_id}")
+                print(f"\n[clean project] 自动删除项目成功: id={proj_id}")
             except Exception as e:
-                print(f"[clean project] 删除项目失败，id={proj_id}：{e}")
+                print(f"\n[clean project] 自动删除项目失败: id={proj_id}, err={e}")
 
 
 # ================= 造数逻辑改造：强化清理容错 =================
@@ -376,26 +397,54 @@ def driver(request):
     browser.quit()
 
 
-
 @pytest.fixture
 def logged_in_driver(driver, env, login, pm_token):
     """
     利用 API 拿到 Token 后，直接通过 JS 注入浏览器的 localStorage，跳过 UI 登录步骤。
     默认使用 PM 角色，如果想用其他角色，在用例中重新注入即可。
     """
+    from selenium.webdriver.common.by import By
+
     # 先打开前端首页
     driver.get(env["web_base_url"])
+    # 等待 Vue 根节点渲染
+    wait_for_element_visible(driver, (By.ID, "app"), timeout=10)
+
     # 执行JS脚本：把token写入浏览器本地存储，模拟登录成功
     driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{pm_token}')")
+
     # 跳转到仪表盘页面
     driver.get(f"{env['web_base_url']}/dashboard")
-
-    # 导入等待工具，等待页面顶部导航栏标题元素出现，代表登录后页面加载完成
-    from utils.waits import wait_for_element_visible
-    from selenium.webdriver.common.by import By
+    # 等待页面顶部导航栏标题元素出现
     wait_for_element_visible(driver, (By.CSS_SELECTOR, ".navbar__title"))
     return driver
 
+
+@pytest.fixture
+def switch_role(driver, env, login):
+    """
+    【新增神器】动态切换浏览器登录角色。
+    保证在真实域名下注入 Token，并通过强制刷新让 Vue Store 重新初始化。
+    """
+    from selenium.webdriver.common.by import By
+
+    def _switch(role: str):
+        token = login(role)["token"]
+        # 1. 确保目前在真实域名下
+        if not driver.current_url.startswith(env["web_base_url"]):
+            driver.get(env["web_base_url"])
+
+        # 2. 等待 Vue 的根节点 #app 渲染完毕，确保 Vue 已经启动
+        wait_for_element_visible(driver, (By.ID, "app"), timeout=10)
+
+        # 3. 注入最新的 Token，并刷新页面让 Store 重新初始化
+        driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{token}')")
+        driver.refresh()
+
+        # 4. 再次等待 #app 渲染，确保刷新后 Vue 重新启动完毕
+        wait_for_element_visible(driver, (By.ID, "app"), timeout=10)
+
+    return _switch
 
 
 @pytest.fixture
@@ -440,17 +489,3 @@ def pytest_runtest_makereport(item, call):
     file_path = SCREENSHOT_DIR / f"{item.name}.png"
     file_path.write_bytes(png)
     allure.attach(png, name=f"失败截图-{item.name}", attachment_type=allure.attachment_type.PNG)
-
-@pytest.fixture(scope="session")
-def no_auth_client(env) -> requests.Session:
-    """无token匿名会话，用于未登录鉴权测试"""
-    sess = requests.Session()
-    sess.base_url = env["api_base_url"].rstrip("/")
-    sess.headers.update({
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    })
-    yield sess
-    sess.close()
-
-

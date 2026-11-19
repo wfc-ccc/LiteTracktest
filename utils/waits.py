@@ -41,3 +41,14 @@ def wait_for_first_displayed(driver: WebDriver, locator: tuple, timeout: float =
 def wait_for_element_invisible(driver: WebDriver, locator: tuple, timeout: float = DEFAULT_TIMEOUT) -> bool:
     """等待元素不可见（display:none / 不在DOM）"""
     return WebDriverWait(driver, timeout).until(EC.invisibility_of_element_located(locator))
+def wait_for_element_not_disabled(driver: WebDriver, locator: tuple, timeout: float = DEFAULT_TIMEOUT) -> WebElement:
+    """等待元素存在，并且不存在 disabled 属性
+    适配Element Plus表单：校验通过后移除disabled，按钮才可提交
+    """
+    def _not_disabled(d: WebDriver) -> WebElement | bool:
+        elem = d.find_element(*locator)
+        if elem.get_attribute("disabled") is None:
+            return elem
+        return False
+    return WebDriverWait(driver, timeout).until(_not_disabled)
+

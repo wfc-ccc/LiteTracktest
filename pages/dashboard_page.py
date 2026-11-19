@@ -1,9 +1,7 @@
 """工作台首页 POM。
-
 源码是 src/views/Dashboard.vue。
 涉及多角色视图切换、项目概览面板、任务/缺陷列表，以及审核未通过的悬浮气泡。
 """
-
 from __future__ import annotations
 
 from selenium.webdriver.common.by import By
@@ -14,7 +12,6 @@ from utils.waits import wait_for_element_visible
 
 class DashboardPage(BasePage):
     # ================= 元素定位器 =================
-
     # 未读动态提示 (el-alert)
     UNREAD_ALERT = (By.CSS_SELECTOR, ".dashboard__hint")
     UNREAD_TEXT = (By.CSS_SELECTOR, ".dashboard__hint .el-alert__title")
@@ -36,10 +33,9 @@ class DashboardPage(BasePage):
     BUG_TABLE_TITLE = (By.XPATH,
                        "//div[contains(@class, 'el-row dashboard__row')]//div[contains(@class, 'el-col')][2]//div[contains(@class, 'card-header')]//span")
 
-    # 表格行 (假设我们通过任务/缺陷标题来定位行)
-    TASK_ROW = (By.XPATH,
-                "//div[contains(@class, 'el-col')][1]//tr[.//span[contains(@class,'task-cell__title') and contains(text(), '{title}')]]")
-    BUG_ROW = (By.XPATH, "//div[contains(@class, 'el-col')][2]//tr[.//td[contains(text(), '{title}')]]")
+    # 表格行：使用 contains(.) 匹配全部内部文本，规避Element Plus文本拆分导致定位失败
+    TASK_ROW = (By.XPATH, "//div[contains(@class, 'el-col')][1]//tr[contains(., '{title}')]")
+    BUG_ROW = (By.XPATH, "//div[contains(@class, 'el-col')][2]//tr[contains(., '{title}')]")
 
     # 审核未通过标签及气泡
     AUDIT_REJECT_FLAG = (By.CSS_SELECTOR, ".task-audit-flag")
@@ -47,7 +43,6 @@ class DashboardPage(BasePage):
     AUDIT_REJECT_REASON = (By.CSS_SELECTOR, ".audit-reject-popper__reason")
 
     # ================= 页面动作 =================
-
     def open(self) -> None:
         """打开工作台"""
         self.open_path("/dashboard")
@@ -55,7 +50,6 @@ class DashboardPage(BasePage):
         self.visible((By.CSS_SELECTOR, ".stat-card"))
 
     # ---------- 数据获取 ----------
-
     def get_stat_value(self, label: str) -> str:
         """
         获取统计卡片的值。
@@ -80,19 +74,19 @@ class DashboardPage(BasePage):
         return task_title, bug_title
 
     # ---------- 列表交互 ----------
-
     def click_task_row(self, title: str) -> None:
         """点击任务列表中的某一行，跳转到任务看板"""
         row_loc = (self.TASK_ROW[0], self.TASK_ROW[1].replace("{title}", title))
+        self.visible(row_loc)
         self.click(row_loc)
 
     def click_bug_row(self, title: str) -> None:
         """点击缺陷列表中的某一行，跳转到缺陷详情"""
         row_loc = (self.BUG_ROW[0], self.BUG_ROW[1].replace("{title}", title))
+        self.visible(row_loc)
         self.click(row_loc)
 
     # ---------- 气泡交互 ----------
-
     def click_audit_reject_flag(self) -> None:
         """点击任务列表中的『审核未通过』标签，弹出气泡"""
         self.click(self.AUDIT_REJECT_FLAG)

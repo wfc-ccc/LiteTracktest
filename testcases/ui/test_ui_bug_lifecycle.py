@@ -1,58 +1,120 @@
 import allure
 import pytest
-from selenium.webdriver.common.by import By
+import uuid
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 
-@allure.feature("UI 自动化")
-@allure.story("缺陷生命周期流转")
+@pytest.mark.ui
 class TestBugLifecycleUI:
 
     @pytest.fixture
-    def bug_list_page(self, logged_in_driver, env):
+    def bug_list_page(self, driver, env):
         from pages.bug_list_page import BugListPage
-        return BugListPage(logged_in_driver, env["web_base_url"])
+        return BugListPage(driver, env["web_base_url"])
 
     @pytest.fixture
-    def bug_detail_page(self, logged_in_driver, env):
+    def bug_detail_page(self, driver, env):
         from pages.bug_detail_page import BugDetailPage
-        return BugDetailPage(logged_in_driver, env["web_base_url"])
+        return BugDetailPage(driver, env["web_base_url"])
 
-    @allure.title("完整缺陷流转：QA 提 Bug -> DEV 修复 -> QA 关闭")
-    def test_bug_full_lifecycle(self, bug_list_page, bug_detail_page, driver, login, project_id):
-        import uuid
-        title = f"UI缺陷-{uuid.uuid4().hex[:6]}"
+    @pytest.fixture
+    def login_page(self, driver, env):
+        from pages.login_page import LoginPage
+        return LoginPage(driver, env["web_base_url"])
 
-        with allure.step("1. 切换为 QA 账号提交缺陷"):
-            # 动态注入 QA Token 切换身份
-            qa_token = login("qa01")["token"]
-            driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{qa_token}')")
-            bug_list_page.open(project_id)
+    @pytest.fixture
+    def dashboard_page(self, driver, env):
+        from pages.dashboard_page import DashboardPage
+        return DashboardPage(driver, env["web_base_url"])
 
-            bug_list_page.click(bug_list_page.BTN_CREATE)
+    def _wait_bug_status(self, bug_detail_page, expect_status, timeout=15):
+        def _match(d):
+            try:
+                return bug_detail_page.get_status() == expect_status
+            except Exception:
+                return False
+
+        WebDriverWait(bug_detail_page.driver, timeout).until(_match)
+
+    @allure.title("缺陷完整流转：QA提交缺陷 → DEV工作台点击缺陷修复 → QA工作台验收关闭")
+    def test_bug_full_lifecycle_dashboard(
+        self,
+        bug_list_page,
+        bug_detail_page,
+        login_page,
+        dashboard_page,
+        driver,
+        env,
+        switch_role
+    ):
+        bug_title = f"BUG-{uuid.uuid4().hex[:8]}"
+        assignee_name = "张开发"
+
+        with allure.step("1. QA账号登录，进入缺陷列表页新建并提交缺陷"):
+            switch_role("qa01")
+            login_page.logout()
+            login_page.wait_login_page_display()
+            login_page.login(username="qa01", password="123456")
+            login_page.wait_until_logged_in()
+
+            bug_list_page.open(env["project_id"])
+            bug_list_page.open_create_dialog()
+
             bug_list_page.fill_create_form(
-                title=title, project="轻舟自动化验收项目", description="UI自动化提的Bug",
-                assignee="开发一号", severity="严重"
+                title=bug_title,
+                assignee=assignee_name,
+                module="登录模块",
+                found_version="V1.0",
+                env="测试环境",
+                priority="MEDIUM",
+                severity="SERIOUS",
+                description="复现步骤：打开页面，点击按钮，页面报错",
+                expect="正常跳转",
+                actual="页面抛出异常"
             )
             bug_list_page.submit_create()
-            # 搜索并等待表格出现该缺陷
-            bug_list_page.search(title=title)
-            bug_list_page.wait_row(title)
-
-        with allure.step("2. 切换为 DEV 账号进行修复"):
-            dev_token = login("dev01")["token"]
-            driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{dev_token}')")
-            driver.refresh()
-
-            bug_list_page.search(title=title)
-            bug_list_page.click_row_action(title, "详情")  # 进入详情页
-            bug_detail_page.submit_fix_report(
-                root_cause="UI测试：修复了空指针", version="v1.0.1", self_test="自测通过"
+            WebDriverWait(driver, 20).until(
+                EC.visibility_of_element_located(bug_list_page.SEARCH_TOOLBAR)
             )
-            assert bug_detail_page.get_status() == "已修复"
 
-        with allure.step("3. 切换回 QA 账号验证关闭"):
-            driver.execute_script(f"window.localStorage.setItem('litetrack_token', '{qa_token}')")
+        with allure.step("2. DEV账号登录，打开工作台，在我的缺陷表格点击该缺陷进入详情修复"):
+            switch_role("dev01")
+            login_page.logout()
+            login_page.wait_login_page_display()
+            login_page.login(username="dev01", password="123456")
+            login_page.wait_until_logged_in()
+
+            dashboard_page.open()
             driver.refresh()
+            dashboard_page.click_bug_row(bug_title)
 
-            bug_detail_page.submit_qa_verification(result="验证通过", steps="UI回归通过")
-            assert bug_detail_page.get_status() == "已关闭"
+            allure.attach(driver.get_screenshot_as_png(), name="bug_detail_page",
+                          attachment_type=allure.attachment_type.PNG)
+            allure.attach(driver.page_source, name="bug_detail_html", attachment_type=allure.attachment_type.HTML)
+
+            bug_detail_page.submit_fix_report(
+                root_cause="接口参数未做非空校验，触发空指针异常",
+                version="V1.1",
+                self_test="自测通过，不再报错",
+                impact="仅该接口",
+                risks="无"
+            )
+            self._wait_bug_status(bug_detail_page, "已修复")
+
+        with allure.step("3. QA账号登录，打开工作台，找到缺陷并验收关闭"):
+            switch_role("qa01")
+            login_page.logout()
+            login_page.wait_login_page_display()
+            login_page.login(username="qa01", password="123456")
+            login_page.wait_until_logged_in()
+
+            dashboard_page.open()
+            driver.refresh()
+            dashboard_page.click_bug_row(bug_title)
+
+            bug_detail_page.submit_qa_verification(
+                result="验证通过",
+                steps="复现步骤执行通过，功能恢复正常"
+            )
+            self._wait_bug_status(bug_detail_page, "已关闭")

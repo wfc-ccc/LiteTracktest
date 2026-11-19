@@ -64,7 +64,9 @@ class ProjectManagePage(BasePage):
     def open(self) -> None:
         """打开项目管理页"""
         self.open_path("/projects")
-        self.visible(self.BTN_CREATE)
+        # 🌟 修复：不能等 BTN_CREATE，因为 QA 没权限看这个按钮。
+        # 换成等待所有角色可见的通用搜索输入框出现
+        self.visible(self.INPUT_NAME)
 
     # ---------- 搜索与表格 ----------
 
