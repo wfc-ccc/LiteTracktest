@@ -455,6 +455,22 @@ class KnowledgeBasePage(BasePage):
                 return btns
         return []
 
+    def get_access_level(self, filename: str, timeout: int = 10) -> str:
+        """读某行的「访问权限」标签文字（全员访问 / AI可检索 / 仅管理员）。
+
+        不按列下标取：这列 `v-if isAdmin`，ADMIN 看到 4 列、DEV 只有 3 列，
+        写死下标必错位。直接在这一行里找 el-tag，按角色天然对齐。
+        DEV/QA 没有这列 → 返回空串，用例据此断言「员工看不到访问权限」。
+        """
+        loc = (self.ROW[0], self.ROW[1].replace("{filename}", filename))
+        rows = self._visible(loc, timeout=timeout)
+        if not rows:
+            raise AssertionError(f"列表里没有文件「{filename}」，"
+                                 f"当前列表：{self.row_files()}")
+        tags = [t for t in rows[0].find_elements(By.CSS_SELECTOR, ".el-tag")
+                if self._safe_displayed(t)]
+        return self._txt(tags[0]) if tags else ""
+
     def click_row_action(self, filename: str, btn_text: str, timeout: int = 20) -> None:
         if not self.wait_row(filename, timeout=timeout):
             raise AssertionError(f"列表里没有文件「{filename}」")
@@ -554,7 +570,13 @@ class KnowledgeBasePage(BasePage):
             return False
 
     def _select_access_level(self, access_level: str, dlg, timeout: int = 10) -> None:
-        """访问权限下拉：option label 很长，按前缀包含匹配"""
+        """访问权限下拉：option label 很长（「1 → 全员访问（员工可见，AI 可检索）」这种），
+        必须按**前缀**优先匹配。
+
+        坑：选项 1 的说明文字里就含「AI 可检索」，如果只做 contains 匹配，
+        传入「AI可检索」会命中选项 1（全员访问）而不报错——静默选错权限，
+        后面的可见性断言全跟着错。所以打分：完全相等 > 前缀 > 包含。
+        """
         sel = dlg.find_elements(*self.DIALOG_ACCESS_SELECT)
         if not sel:
             raise AssertionError("弹窗里没找到「访问权限」下拉")
@@ -562,19 +584,31 @@ class KnowledgeBasePage(BasePage):
 
         norm = "".join(access_level.split())
 
+        def _score(text: str) -> int:
+            t = "".join(text.split())
+            if t == norm:
+                return 3
+            if t.startswith(norm):
+                return 2
+            if norm in t:
+                return 1
+            return 0
+
         def _pick(driver):
+            best, best_score = None, 0
             for o in driver.find_elements(*self.SELECT_OPTION):
                 if not self._safe_displayed(o):
                     continue
-                if norm in "".join(self._txt(o).split()):
-                    return o
-            return False
+                s = _score(self._txt(o))
+                if s > best_score:
+                    best, best_score = o, s
+            return best if best_score else False
 
         try:
             opt = self._wait(self.driver, timeout, poll=0.15).until(_pick)
         except TimeoutException:
             raise AssertionError(
-                f"访问权限下拉里没有含「{access_level}」的选项，"
+                f"访问权限下拉里没有匹配「{access_level}」的选项，"
                 f"可见选项：{[self._txt(o) for o in self.driver.find_elements(*self.SELECT_OPTION)]}"
             )
         self._click_el(opt)
