@@ -1,10 +1,11 @@
 import allure
 import pytest
 import uuid
+from pathlib import Path
 from utils.config_loader import DATA_DIR
 
 
-def _kb_file(ext: str):
+def _kb_file(ext: str) -> Path:
     path = DATA_DIR / f"ai-test-{uuid.uuid4().hex[:6]}.{ext}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("这是用于知识库接口自动化的测试文本，包含足够的内容以满足要求。", encoding="utf-8")
@@ -141,14 +142,17 @@ class TestAiAssistantApi:
 
     @allure.title("对话内临时上传：提取纯文本并按 3000 字上限截断")
     def test_upload_temp_extracts_text(self, ai):
-        # 构造一个超长文本文件以测试截断逻辑
         data_file = _kb_file("txt")
         long_text = "测试文本" * 1000
         data_file.write_text(long_text, encoding="utf-8")
-
-        text = ai.upload_temp(str(data_file))
-        assert len(text) > 0, "提取的文本为空"
-        assert len(text) == 3000, f"未按 3000 字上限截断，实际长度: {len(text)}"
+        try:
+            text = ai.upload_temp(str(data_file))
+            assert len(text) > 0, "提取的文本为空"
+            assert len(text) == 3000, f"未按 3000 字上限截断，实际长度: {len(text)}"
+        finally:
+            # 用完删除文件，加判断防止文件不存在抛异常
+            if data_file.exists():
+                data_file.unlink()
 
     @allure.title("缺陷润色：正常入参返回结构化的缺陷单")
     def test_optimize_bug(self, ai, project_id):
